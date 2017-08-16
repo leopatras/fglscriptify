@@ -1,0 +1,904 @@
+#!/bin/bash
+#!/bin/bash
+DIR=`dirname "$0"`
+#echo "DIR='$DIR'"
+pushd "$DIR" >/dev/null
+BINDIR=`pwd`
+#echo "BINDIR='$BINDIR'"
+popd > /dev/null
+export _CATFILE="$BINDIR/`basename $0`"
+export _CALLING_SCRIPT=`basename $0`
+#echo "me:$_CATFILE"
+firstcheck=`mktemp`
+fglrun -V > $firstcheck
+if [ $? -ne 0 ]
+then
+  rm -f $firstcheck
+  echo "ERROR: no fglrun in the path"
+  exit 1
+fi
+ver=`cat $firstcheck | sed -n '/Genero virtual machine/q;p'`
+major=`echo $ver | sed -n 's/^.* \([0-9]*\)\.\([0-9]*\).*$/\1/p'`
+rm -f $firstcheck
+if [ $major -lt 3 ]
+then
+  echo "ERROR:fglrun version should be >= 3.0 ,current:$ver"
+  exit 1
+fi
+
+replace_dot(){
+# replace dot with underscore
+  local dir=`dirname $1`
+  local base=`basename $1`
+#genero doesn't like dots in the filename
+  base=`echo $base | sed -e 's/\./_/g'`
+  echo "$dir/$base"
+}
+
+# compute a unique temp filename and a unique directory
+# without dots in the name
+while true
+do
+  _tmpfile=`mktemp`
+  _tmpdir_extractor=`dirname $_tmpfile`
+  rm -f $_tmpfile
+  _tmpfile=`replace_dot $_tmpfile`
+
+  _TMPDIR=`mktemp -d`
+  rm -rf $_TMPDIR
+  export _TMPDIR=`replace_dot $_TMPDIR`
+
+  if [ ! -e $_tmpfile ] && [ ! -e $_TMPDIR ]
+  then
+    break
+  fi
+done
+#echo "_tmpfile:$_tmpfile,_tmpdir_extractor:$_tmpdir_extractor,_TMPDIR:$_TMPDIR"
+
+#we insert catsource.4gl on the next lines
+cat >$_tmpfile.4gl <<EOF
+--note: some 4gl constructs in this file are there to surround the pitfalls
+--of echo'ing this file with the windows echo command to a temp 4gl file
+--percent signs are avoided as well as or signs, thats why we avoid
+--the sfmt operator and the cat operator and mixing quotes with double quotes
+OPTIONS SHORT CIRCUIT
+IMPORT util
+IMPORT os
+DEFINE tmpdir,fname,full,lastmodule STRING
+DEFINE m_bat INT
+DEFINE singlequote,doublequote,backslash STRING
+DEFINE m_binarr DYNAMIC ARRAY OF STRING
+MAIN
+  DEFINE line,err,catfile STRING
+  DEFINE ch,chw base.Channel
+  DEFINE sb base.StringBuffer
+  DEFINE write,writebin INT
+  LET singlequote=ASCII(39)
+  LET doublequote=ASCII(34)
+  LET backslash=ASCII(92) --we must not use the literal here
+  LET m_binarr[m_binarr.getLength()+1]='png' 
+  LET m_binarr[m_binarr.getLength()+1]='jpg'
+  LET m_binarr[m_binarr.getLength()+1]='bmp'
+  LET m_binarr[m_binarr.getLength()+1]='gif'
+  LET m_binarr[m_binarr.getLength()+1]='tiff'
+  LET m_binarr[m_binarr.getLength()+1]='wav'
+  LET m_binarr[m_binarr.getLength()+1]='mp3'
+  LET m_binarr[m_binarr.getLength()+1]='aiff'
+  LET m_binarr[m_binarr.getLength()+1]='mpg'
+  LET sb=base.StringBuffer.create()
+  LET catfile=fgl_getenv("_CATFILE") --set by calling script
+  LET tmpdir=fgl_getenv("_TMPDIR") --set by calling script
+  LET m_bat=fgl_getenv("_IS_BAT_FILE") IS NOT NULL
+  IF catfile IS NULL OR tmpdir IS NULL THEN
+    CALL myerr("_CATFILE or _TMPDIR not set")
+  END IF
+  IF catfile IS NULL THEN
+    LET catfile=arg_val(1)
+    LET tmpdir=arg_val(2)
+  END IF
+  IF NOT m_bat THEN --windows fullPath is clumsy
+    LET tmpdir=os.Path.fullPath(tmpdir)
+  END IF
+  LET ch=base.Channel.create()
+  LET chw=base.Channel.create()
+  IF NOT os.Path.exists(tmpdir) THEN
+    IF NOT os.Path.mkdir(tmpdir) THEN
+      LET err="Can't mkdir :",tmpdir
+      CALL myerr(err)
+    END IF
+  END IF
+  CALL ch.openFile(catfile,"r")
+  WHILE (line:=ch.readLine()) IS NOT NULL
+    CASE
+       WHEN m_bat AND line.getIndexOf("rem __CAT_EOF_BEGIN__:",1)==1
+         LET fname=line.subString(23,line.getLength())
+         GOTO mark1
+       WHEN (NOT m_bat) AND  line.getIndexOf("#__CAT_EOF_BEGIN__:",1)==1
+         LET fname=line.subString(20,line.getLength())
+       LABEL mark1:
+         LET full=os.Path.join(tmpdir,fname)
+         CALL checkSubdirs()
+         IF isBinary(fname) THEN
+           LET writebin=TRUE
+           CALL sb.clear()
+         ELSE
+           LET write=TRUE
+           CALL chw.openFile(full,"w")
+         END IF
+       WHEN ((NOT m_bat) AND line=="#__CAT_EOF_END__") OR
+            (m_bat AND line=="rem __CAT_EOF_END__")
+         IF writebin THEN
+           LET writebin=FALSE
+           CALL util.Strings.base64Decode(sb.toString(),full)
+         ELSE
+           LET write=FALSE
+           CALL chw.close()
+           CALL eventuallyCompileFile()
+         END IF
+       WHEN writebin
+         CALL sb.append(line.subString(IIF(m_bat,5,2),line.getLength()))
+       WHEN write
+         CALL chw.writeLine(line.subString(IIF(m_bat,5,2),line.getLength()))
+    END CASE
+  END WHILE
+  CALL ch.close()
+  CALL runLastModule()
+END MAIN
+
+FUNCTION runLastModule() --we must get argument quoting right
+  DEFINE i INT
+  DEFINE arg,cmd STRING
+  IF lastmodule IS NULL THEN RETURN END IF
+  LET cmd="fglrun ",os.Path.join(tmpdir,lastmodule)
+  FOR i=1 TO num_args()
+    LET arg=arg_val(i)
+    CASE
+      WHEN m_bat AND arg.getIndexOf(' ',1)==0 AND 
+                     arg.getIndexOf(doublequote,1)==0
+        LET cmd=cmd,' ',arg --we don't need quotes
+      WHEN m_bat OR arg.getIndexOf(singlequote,1)!=0 
+        --we must use double quotes on windows
+        LET cmd=cmd,' ',doublequote,quoteDouble(arg),doublequote
+      OTHERWISE
+        --sh: you can't quote single quotes inside single quotes
+        --everything else does not need to be quoted
+        LET cmd=cmd,' ',singlequote,arg,singlequote
+    END CASE
+  END FOR
+  --DISPLAY "cmd:",cmd
+  CALL myrun(cmd)
+END FUNCTION
+
+FUNCTION myerr(err)
+  DEFINE err STRING
+  DISPLAY "ERROR:",err
+  EXIT PROGRAM 1
+END FUNCTION
+
+FUNCTION eventuallyCompileFile()
+  DEFINE cmd STRING
+  CASE
+    WHEN os.Path.extension(fname)=="4gl"
+      LET cmd="cd ",tmpdir," && fglcomp -M ",fname
+      CALL myrun(cmd)
+      --DISPLAY "dirname:",fname,",basename:",os.Path.baseName(fname)
+      LET lastmodule=os.Path.baseName(fname)
+      --cut extension
+      LET lastmodule=lastmodule.subString(1,lastmodule.getLength()-4)
+      --DISPLAY "lastmodule=",lastmodule
+    WHEN os.Path.extension(fname)=="per"
+      LET cmd="cd ",tmpdir," && fglform -M ",fname
+      CALL myrun(cmd)
+    --other (resource) files are just copied
+  END CASE
+END FUNCTION
+
+FUNCTION myrun(cmd)
+  DEFINE cmd STRING, code INT
+  --DISPLAY "myrun:",cmd
+  RUN cmd RETURNING code
+  IF code THEN
+    EXIT PROGRAM 1
+  END IF
+END FUNCTION
+
+FUNCTION checkSubdirs()
+  DEFINE i,found INT
+  DEFINE dir,err STRING
+  DEFINE dirs DYNAMIC ARRAY OF STRING
+  IF m_bat THEN
+    RETURN 
+  END IF
+  LET dir=os.Path.fullPath(os.Path.dirName(full))
+  WHILE TRUE
+    CASE
+      WHEN dir IS NULL
+        EXIT WHILE
+      WHEN dir==tmpdir
+        LET found=true
+        EXIT WHILE
+      OTHERWISE
+        CALL dirs.insertElement(1)
+        LET dirs[1]=dir
+    END CASE
+    LET dir=os.Path.fullPath(os.Path.dirName(dir))
+  END WHILE
+  IF NOT found THEN
+    --we can't use sfmt because of .bat echo pitfalls
+    LET err=singlequote,fname,singlequote,' does point outside'
+    CALL myerr(err)
+  END IF
+  FOR i=1 TO dirs.getLength()
+    LET dir=dirs[i]
+    IF NOT os.Path.exists(dir) THEN
+      IF NOT os.Path.mkdir(dir) THEN
+        LET err="Can't create directory:",dir
+        CALL myerr(err)
+      END IF
+    END IF
+  END FOR
+END FUNCTION
+
+FUNCTION quoteDouble(s)
+  DEFINE s STRING
+  DEFINE c STRING
+  DEFINE i INT
+  DEFINE sb base.StringBuffer
+  LET sb=base.StringBuffer.create()
+  FOR i=1 TO s.getLength()
+    LET c=s.getCharAt(i)
+    CASE
+      WHEN c==doublequote
+        CALL sb.append(backslash)
+      WHEN (NOT m_bat) AND  c==backslash
+        CALL sb.append(backslash)
+    END CASE
+    CALL sb.append(c)
+  END FOR
+  RETURN sb.toString()
+END FUNCTION
+
+FUNCTION isBinary(fname)
+  DEFINE fname,ext STRING
+  DEFINE i INT
+  LET ext=os.Path.extension(fname)
+  FOR i=1 TO m_binarr.getLength()
+    IF m_binarr[i]==ext THEN 
+      RETURN TRUE
+    END IF
+  END FOR
+  RETURN FALSE
+END FUNCTION
+EOF
+
+#now compile and run catsource from the temp location
+pushd `pwd` > /dev/null
+cd $_tmpdir_extractor
+mybase=`basename $_tmpfile`
+fglcomp -M $mybase.4gl
+if [ $? -ne 0 ]
+then
+  exit 1
+fi
+rm -f $mybase.4gl
+popd > /dev/null
+fglrun $_tmpfile.42m "$@"
+mycode=$?
+rm -f $_tmpfile.42m
+rm -rf $_TMPDIR
+exit $mycode
+#__CAT_EOF_BEGIN__:catsource.bat
+#@echo off
+#setlocal EnableExtensions
+#
+#rem get unique file name 
+#:loop
+#set randbase=gen~%RANDOM%
+#set extractor="%tmp%\%randbase%.4gl"
+#set extractor42m="%tmp%\%randbase%.42m"
+#rem important: without quotes 
+#set _TMPDIR=%tmp%\%randbase%_d
+#set _IS_BAT_FILE=TRUE
+#if exist %extractor% goto :loop
+#if exist %extractor42m% goto :loop
+#if exist %_TMPDIR% goto :loop
+#rem echo tmp=%tmp%
+#
+#set tmpdrive=%tmp:~0,2%
+#set _CATFILE=%~dpnx0
+#rem We use a small line extractor program in 4gl to a temp file
+#rem the bat only solutions at 
+#rem https://stackoverflow.com/questions/7954719/how-can-a-batch-script-do-the-equivalent-of-cat-eof
+#rem are too slow for bigger programs, so 4gl rules !
+#
+#echo # Extractor coming from catsource.bat > %extractor%
+#rem HERE_COMES_CATSOURCE
+#set mydir=%cd%
+#set mydrive=%~d0
+#%tmpdrive%
+#cd %tmp%
+#fglcomp -M %randbase%
+#if ERRORLEVEL 1 exit /b
+#del %extractor%
+#rem extract the 4gl code behind us to another 4GL file
+#%mydrive%
+#cd %mydir%
+#fglrun %extractor42m% %1 %2 %3 %4 %5
+#if ERRORLEVEL 1 exit /b
+#del %extractor42m%
+#exit /b
+#__CAT_EOF_END__
+#__CAT_EOF_BEGIN__:catsource.sh
+##!/bin/bash
+#DIR=`dirname "$0"`
+##echo "DIR='$DIR'"
+#pushd "$DIR" >/dev/null
+#BINDIR=`pwd`
+##echo "BINDIR='$BINDIR'"
+#popd > /dev/null
+#export _CATFILE="$BINDIR/`basename $0`"
+#export _CALLING_SCRIPT=`basename $0`
+##echo "me:$_CATFILE"
+#firstcheck=`mktemp`
+#fglrun -V > $firstcheck
+#if [ $? -ne 0 ]
+#then
+#  rm -f $firstcheck
+#  echo "ERROR: no fglrun in the path"
+#  exit 1
+#fi
+#ver=`cat $firstcheck | sed -n '/Genero virtual machine/q;p'`
+#major=`echo $ver | sed -n 's/^.* \([0-9]*\)\.\([0-9]*\).*$/\1/p'`
+#rm -f $firstcheck
+#if [ $major -lt 3 ]
+#then
+#  echo "ERROR:fglrun version should be >= 3.0 ,current:$ver"
+#  exit 1
+#fi
+#
+#replace_dot(){
+## replace dot with underscore
+#  local dir=`dirname $1`
+#  local base=`basename $1`
+##genero doesn't like dots in the filename
+#  base=`echo $base | sed -e 's/\./_/g'`
+#  echo "$dir/$base"
+#}
+#
+## compute a unique temp filename and a unique directory
+## without dots in the name
+#while true
+#do
+#  _tmpfile=`mktemp`
+#  _tmpdir_extractor=`dirname $_tmpfile`
+#  rm -f $_tmpfile
+#  _tmpfile=`replace_dot $_tmpfile`
+#
+#  _TMPDIR=`mktemp -d`
+#  rm -rf $_TMPDIR
+#  export _TMPDIR=`replace_dot $_TMPDIR`
+#
+#  if [ ! -e $_tmpfile ] && [ ! -e $_TMPDIR ]
+#  then
+#    break
+#  fi
+#done
+##echo "_tmpfile:$_tmpfile,_tmpdir_extractor:$_tmpdir_extractor,_TMPDIR:$_TMPDIR"
+#
+##we insert catsource.4gl on the next lines
+#cat >$_tmpfile.4gl <<EOF
+##HERE_COMES_CATSOURCE
+#EOF
+#
+##now compile and run catsource from the temp location
+#pushd `pwd` > /dev/null
+#cd $_tmpdir_extractor
+#mybase=`basename $_tmpfile`
+#fglcomp -M $mybase.4gl
+#if [ $? -ne 0 ]
+#then
+#  exit 1
+#fi
+#rm -f $mybase.4gl
+#popd > /dev/null
+#fglrun $_tmpfile.42m "$@"
+#mycode=$?
+#rm -f $_tmpfile.42m
+#rm -rf $_TMPDIR
+#exit $mycode
+#__CAT_EOF_END__
+#__CAT_EOF_BEGIN__:catsource.4gl
+#--note: some 4gl constructs in this file are there to surround the pitfalls
+#--of echo'ing this file with the windows echo command to a temp 4gl file
+#--percent signs are avoided as well as or signs, thats why we avoid
+#--the sfmt operator and the cat operator and mixing quotes with double quotes
+#OPTIONS SHORT CIRCUIT
+#IMPORT util
+#IMPORT os
+#DEFINE tmpdir,fname,full,lastmodule STRING
+#DEFINE m_bat INT
+#DEFINE singlequote,doublequote,backslash STRING
+#DEFINE m_binarr DYNAMIC ARRAY OF STRING
+#MAIN
+#  DEFINE line,err,catfile STRING
+#  DEFINE ch,chw base.Channel
+#  DEFINE sb base.StringBuffer
+#  DEFINE write,writebin INT
+#  LET singlequote=ASCII(39)
+#  LET doublequote=ASCII(34)
+#  LET backslash=ASCII(92) --we must not use the literal here
+#  LET m_binarr[m_binarr.getLength()+1]='png' 
+#  LET m_binarr[m_binarr.getLength()+1]='jpg'
+#  LET m_binarr[m_binarr.getLength()+1]='bmp'
+#  LET m_binarr[m_binarr.getLength()+1]='gif'
+#  LET m_binarr[m_binarr.getLength()+1]='tiff'
+#  LET m_binarr[m_binarr.getLength()+1]='wav'
+#  LET m_binarr[m_binarr.getLength()+1]='mp3'
+#  LET m_binarr[m_binarr.getLength()+1]='aiff'
+#  LET m_binarr[m_binarr.getLength()+1]='mpg'
+#  LET sb=base.StringBuffer.create()
+#  LET catfile=fgl_getenv("_CATFILE") --set by calling script
+#  LET tmpdir=fgl_getenv("_TMPDIR") --set by calling script
+#  LET m_bat=fgl_getenv("_IS_BAT_FILE") IS NOT NULL
+#  IF catfile IS NULL OR tmpdir IS NULL THEN
+#    CALL myerr("_CATFILE or _TMPDIR not set")
+#  END IF
+#  IF catfile IS NULL THEN
+#    LET catfile=arg_val(1)
+#    LET tmpdir=arg_val(2)
+#  END IF
+#  IF NOT m_bat THEN --windows fullPath is clumsy
+#    LET tmpdir=os.Path.fullPath(tmpdir)
+#  END IF
+#  LET ch=base.Channel.create()
+#  LET chw=base.Channel.create()
+#  IF NOT os.Path.exists(tmpdir) THEN
+#    IF NOT os.Path.mkdir(tmpdir) THEN
+#      LET err="Can't mkdir :",tmpdir
+#      CALL myerr(err)
+#    END IF
+#  END IF
+#  CALL ch.openFile(catfile,"r")
+#  WHILE (line:=ch.readLine()) IS NOT NULL
+#    CASE
+#       WHEN m_bat AND line.getIndexOf("rem __CAT_EOF_BEGIN__:",1)==1
+#         LET fname=line.subString(23,line.getLength())
+#         GOTO mark1
+#       WHEN (NOT m_bat) AND  line.getIndexOf("#__CAT_EOF_BEGIN__:",1)==1
+#         LET fname=line.subString(20,line.getLength())
+#       LABEL mark1:
+#         LET full=os.Path.join(tmpdir,fname)
+#         CALL checkSubdirs()
+#         IF isBinary(fname) THEN
+#           LET writebin=TRUE
+#           CALL sb.clear()
+#         ELSE
+#           LET write=TRUE
+#           CALL chw.openFile(full,"w")
+#         END IF
+#       WHEN ((NOT m_bat) AND line=="#__CAT_EOF_END__") OR
+#            (m_bat AND line=="rem __CAT_EOF_END__")
+#         IF writebin THEN
+#           LET writebin=FALSE
+#           CALL util.Strings.base64Decode(sb.toString(),full)
+#         ELSE
+#           LET write=FALSE
+#           CALL chw.close()
+#           CALL eventuallyCompileFile()
+#         END IF
+#       WHEN writebin
+#         CALL sb.append(line.subString(IIF(m_bat,5,2),line.getLength()))
+#       WHEN write
+#         CALL chw.writeLine(line.subString(IIF(m_bat,5,2),line.getLength()))
+#    END CASE
+#  END WHILE
+#  CALL ch.close()
+#  CALL runLastModule()
+#END MAIN
+#
+#FUNCTION runLastModule() --we must get argument quoting right
+#  DEFINE i INT
+#  DEFINE arg,cmd STRING
+#  IF lastmodule IS NULL THEN RETURN END IF
+#  LET cmd="fglrun ",os.Path.join(tmpdir,lastmodule)
+#  FOR i=1 TO num_args()
+#    LET arg=arg_val(i)
+#    CASE
+#      WHEN m_bat AND arg.getIndexOf(' ',1)==0 AND 
+#                     arg.getIndexOf(doublequote,1)==0
+#        LET cmd=cmd,' ',arg --we don't need quotes
+#      WHEN m_bat OR arg.getIndexOf(singlequote,1)!=0 
+#        --we must use double quotes on windows
+#        LET cmd=cmd,' ',doublequote,quoteDouble(arg),doublequote
+#      OTHERWISE
+#        --sh: you can't quote single quotes inside single quotes
+#        --everything else does not need to be quoted
+#        LET cmd=cmd,' ',singlequote,arg,singlequote
+#    END CASE
+#  END FOR
+#  --DISPLAY "cmd:",cmd
+#  CALL myrun(cmd)
+#END FUNCTION
+#
+#FUNCTION myerr(err)
+#  DEFINE err STRING
+#  DISPLAY "ERROR:",err
+#  EXIT PROGRAM 1
+#END FUNCTION
+#
+#FUNCTION eventuallyCompileFile()
+#  DEFINE cmd STRING
+#  CASE
+#    WHEN os.Path.extension(fname)=="4gl"
+#      LET cmd="cd ",tmpdir," && fglcomp -M ",fname
+#      CALL myrun(cmd)
+#      --DISPLAY "dirname:",fname,",basename:",os.Path.baseName(fname)
+#      LET lastmodule=os.Path.baseName(fname)
+#      --cut extension
+#      LET lastmodule=lastmodule.subString(1,lastmodule.getLength()-4)
+#      --DISPLAY "lastmodule=",lastmodule
+#    WHEN os.Path.extension(fname)=="per"
+#      LET cmd="cd ",tmpdir," && fglform -M ",fname
+#      CALL myrun(cmd)
+#    --other (resource) files are just copied
+#  END CASE
+#END FUNCTION
+#
+#FUNCTION myrun(cmd)
+#  DEFINE cmd STRING, code INT
+#  --DISPLAY "myrun:",cmd
+#  RUN cmd RETURNING code
+#  IF code THEN
+#    EXIT PROGRAM 1
+#  END IF
+#END FUNCTION
+#
+#FUNCTION checkSubdirs()
+#  DEFINE i,found INT
+#  DEFINE dir,err STRING
+#  DEFINE dirs DYNAMIC ARRAY OF STRING
+#  IF m_bat THEN
+#    RETURN 
+#  END IF
+#  LET dir=os.Path.fullPath(os.Path.dirName(full))
+#  WHILE TRUE
+#    CASE
+#      WHEN dir IS NULL
+#        EXIT WHILE
+#      WHEN dir==tmpdir
+#        LET found=true
+#        EXIT WHILE
+#      OTHERWISE
+#        CALL dirs.insertElement(1)
+#        LET dirs[1]=dir
+#    END CASE
+#    LET dir=os.Path.fullPath(os.Path.dirName(dir))
+#  END WHILE
+#  IF NOT found THEN
+#    --we can't use sfmt because of .bat echo pitfalls
+#    LET err=singlequote,fname,singlequote,' does point outside'
+#    CALL myerr(err)
+#  END IF
+#  FOR i=1 TO dirs.getLength()
+#    LET dir=dirs[i]
+#    IF NOT os.Path.exists(dir) THEN
+#      IF NOT os.Path.mkdir(dir) THEN
+#        LET err="Can't create directory:",dir
+#        CALL myerr(err)
+#      END IF
+#    END IF
+#  END FOR
+#END FUNCTION
+#
+#FUNCTION quoteDouble(s)
+#  DEFINE s STRING
+#  DEFINE c STRING
+#  DEFINE i INT
+#  DEFINE sb base.StringBuffer
+#  LET sb=base.StringBuffer.create()
+#  FOR i=1 TO s.getLength()
+#    LET c=s.getCharAt(i)
+#    CASE
+#      WHEN c==doublequote
+#        CALL sb.append(backslash)
+#      WHEN (NOT m_bat) AND  c==backslash
+#        CALL sb.append(backslash)
+#    END CASE
+#    CALL sb.append(c)
+#  END FOR
+#  RETURN sb.toString()
+#END FUNCTION
+#
+#FUNCTION isBinary(fname)
+#  DEFINE fname,ext STRING
+#  DEFINE i INT
+#  LET ext=os.Path.extension(fname)
+#  FOR i=1 TO m_binarr.getLength()
+#    IF m_binarr[i]==ext THEN 
+#      RETURN TRUE
+#    END IF
+#  END FOR
+#  RETURN FALSE
+#END FUNCTION
+#__CAT_EOF_END__
+#__CAT_EOF_BEGIN__:fglscriptify.4gl
+#IMPORT os
+#IMPORT util
+#DEFINE m_chw base.Channel
+#DEFINE m_outfile,m_lastsource STRING
+#--DEFINE m_minversion STRING
+#DEFINE m_optarr,m_sourcearr,m_binarr DYNAMIC ARRAY OF STRING
+#DEFINE m_bat,m_verbose INT
+#DEFINE m_envarr DYNAMIC ARRAY OF RECORD
+#  name STRING,
+#  value STRING
+#END RECORD
+#CONSTANT m_binfiles='["png","jpg","bmp","gif","tiff","wav","mp3","aiff","mpg"]'
+#MAIN
+#  CONSTANT R_READ=4
+#  CONSTANT R_EXECUTE=1
+#  DEFINE catsource STRING
+#  DEFINE ch base.Channel
+#  DEFINE line STRING
+#  DEFINE i,dummy INT
+#  CALL parseArgs()
+#  IF m_lastsource IS NULL THEN
+#    CALL myerr("No 4gl source has been added")
+#  END IF
+#  CALL util.JSON.parse(m_binfiles,m_binarr)
+#  IF m_outfile IS NULL THEN
+#    LET m_outfile=os.Path.baseName(m_lastsource)
+#    --subtract .4gl
+#    LET m_outfile=m_outfile.subString(1,m_outfile.getLength()-4)
+#  ELSE
+#    IF os.Path.extension(m_outfile)=="bat" THEN
+#      LET m_bat=TRUE
+#    END IF
+#  END IF
+#  IF m_verbose THEN
+#    DISPLAY "outfile:",m_outfile
+#    DISPLAY "sources:",util.JSON.stringify(m_sourcearr)
+#  END IF
+#  LET ch=base.Channel.create()
+#  LET m_chw=base.Channel.create()
+#  LET catsource="catsource"
+#  IF m_bat THEN
+#    LET catsource=catsource,".bat"
+#  ELSE
+#    LET catsource=catsource,".sh"
+#  END IF
+#  LET catsource=os.Path.join(os.Path.dirName(arg_val(0)),catsource)
+#  CALL ch.openFile(catsource,"r")
+#  CALL m_chw.openFile(m_outfile,"w")
+#  IF m_bat THEN
+#    CALL m_chw.writeLine("@echo off")
+#  ELSE
+#    CALL m_chw.writeLine("#!/bin/bash")
+#  END IF
+#  FOR i=1 TO m_envarr.getLength()
+#    IF m_bat THEN
+#      CALL m_chw.writeLine(sfmt("set %1=%2",m_envarr[i].name,m_envarr[i].value))
+#    ELSE
+#      CALL m_chw.writeLine(sfmt("export %1=%2",m_envarr[i].name,m_envarr[i].value))
+#    END IF
+#  END FOR
+#  WHILE (line:=ch.readLine()) IS NOT NULL
+#    CASE
+#      WHEN (m_bat AND line=="rem HERE_COMES_CATSOURCE") OR
+#           ((NOT m_bat) AND line=="#HERE_COMES_CATSOURCE")
+#        CALL insert_extractor()
+#      OTHERWISE
+#        CALL m_chw.writeLine(line)
+#    END CASE
+#  END WHILE
+#  CALL ch.close()
+#  FOR i=1 TO m_sourcearr.getLength()
+#    CALL appendSource(m_sourcearr[i])
+#  END FOR
+#  -- rights are -r-xr--r--
+#  CALL os.Path.chRwx(m_outfile, ((R_READ+R_EXECUTE)*64) + (R_READ*8) + R_READ ) RETURNING dummy
+#END MAIN
+#
+#FUNCTION parseArgs()
+#  DEFINE i,len INT
+#  DEFINE arg,space,flagX,pre,post STRING
+#  FOR i=0 TO num_args()
+#    LET arg=arg_val(i)
+#    LET len=arg.getLength()
+#
+#&define GETOPT(aopt,shortopt,longopt,desc,isFlag) \
+#    CASE \
+#      WHEN i==0 \
+#        IF LENGTH(longopt)>=10 THEN \
+#          LET space="\t" \
+#        ELSE \
+#          LET space="\t\t" \
+#        END IF \
+#        IF isFlag THEN \
+#          LET flagX = " yes " LET pre="(" LET post=")"\
+#        ELSE \
+#          LET flagX = " no  " LET pre="<" LET post=">"\
+#        END IF \
+#        LET m_optarr[m_optarr.getLength()+1]=flagX,shortopt,"     ",longopt,space," ",pre,desc,post \
+#      WHEN (arg==shortopt OR arg==longopt) AND (NOT isFlag) \
+#        LET i=i+1 \
+#        LET aopt=arg_val(i) \
+#        CONTINUE FOR \
+#      WHEN (arg==shortopt OR arg==longopt) AND isFlag \
+#        LET aopt=TRUE \
+#        CONTINUE FOR \
+#    END CASE
+#
+#    GETOPT(m_outfile,"-o","--outfile","created script file",FALSE)
+#    --GETOPT(m_minversion,"-m","--minversion","minimum fglcomp version",FALSE)
+#    GETOPT(m_verbose,"-v","--verbose","prints some traces",TRUE)
+#    IF i==0 THEN CONTINUE FOR END IF
+#    -- process result_file according to system path
+#    IF (arg=="-e" OR arg=="--env") THEN
+#        LET i=i+1 
+#        CALL addRuntimeEnv(arg_val(i))
+#        CONTINUE FOR
+#    END IF
+#    IF arg.getCharAt(1) = '-' THEN
+#      DISPLAY SFMT("Option %1 is unknown.", arg)
+#      CALL help()
+#    END IF
+#    CALL addToSources(arg)
+#  END FOR
+#  IF num_args()=0 THEN
+#    CALL help()
+#  END IF
+#END FUNCTION
+#
+#FUNCTION addRuntimeEnv(arg)
+#  DEFINE arg STRING
+#  DEFINE idx,new INT
+#  LET idx=arg.getIndexOf("=",1)
+#  IF idx==0 THEN
+#    RETURN 
+#  END IF
+#  LET new=m_envarr.getLength()+1
+#  LET m_envarr[new].name=arg.subString(1,idx-1)
+#  LET m_envarr[new].value=arg.subString(idx+1,arg.getLength())
+#END FUNCTION
+#
+#FUNCTION addToSources(fname)
+#  DEFINE fname STRING
+#  IF NOT os.Path.exists(fname) THEN
+#    CALL myerr(sfmt("Can't find '%1'",fname))
+#  END IF
+#  IF os.Path.isDirectory(fname) THEN
+#    CALL myerr(sfmt("'%1' is a directory, can only add regular files",fname))
+#  END IF
+#  CALL checkIsInPath(fname)
+#  LET m_sourcearr[m_sourcearr.getLength()+1]=fname
+#  IF os.Path.extension(fname)=="4gl" THEN
+#    LET m_lastsource=fname
+#  END IF
+#END FUNCTION
+#
+#--we allow only file names which are inside our current dir
+#--(and sub dirs)
+#FUNCTION checkIsInPath(fname)
+#  DEFINE fname STRING
+#  DEFINE fullpwd,dir STRING
+#  DEFINE found INT
+#  LET fullpwd=os.Path.fullPath(os.Path.pwd())
+#  LET dir=os.Path.fullPath(os.Path.dirName(fname))
+#  WHILE dir IS NOT NULL 
+#    IF dir==fullpwd THEN
+#      LET found=TRUE
+#      EXIT WHILE
+#    END IF
+#    LET dir=os.Path.fullPath(os.Path.dirName(dir))
+#  END WHILE
+#  IF NOT found THEN
+#    CALL myerr(sfmt("'%1' is not inside our current directories subtree",fname))
+#  END IF
+#END FUNCTION
+#
+#
+#FUNCTION help()
+#  DEFINE i INT
+#  DEFINE progname STRING
+#  LET progname=fgl_getenv("_CALLING_SCRIPT")
+#  IF progname IS NULL THEN
+#    LET progname="fglscriptify"
+#  END IF
+#  DISPLAY "usage: ",progname," ?option? ... ?file? <4glmain>"
+#  DISPLAY "Possible options:"
+#  DISPLAY   "  Flag short   long\t\t Value or Description"
+#  DISPLAY   "   no  -e     --env\t\t <ENV>=<value>"
+#  FOR i=1 TO m_optarr.getLength()
+#    DISPLAY "  ",m_optarr[i]
+#  END FOR
+#  EXIT PROGRAM 1
+#END FUNCTION
+#
+#FUNCTION insert_extractor()
+#  DEFINE ch base.Channel
+#  DEFINE line,whitesp,catsource4gl STRING
+#  CONSTANT perc="%"
+#  LET ch=base.Channel.create()
+#  LET catsource4gl=os.Path.join(os.Path.dirName(arg_val(0)),"catsource.4gl")
+#  CALL ch.openFile(catsource4gl,"r")
+#  WHILE (line:=ch.readLine()) IS NOT NULL
+#    IF m_bat THEN
+#      LET whitesp=line CLIPPED
+#      IF whitesp.getLength()==0 THEN --echo with spaces produces ECHO off
+#        LET line="--"
+#      END IF
+#      CALL m_chw.writeLine(sfmt("echo %1 >> %2extractor%3",line,perc,perc))
+#    ELSE
+#      CALL m_chw.writeLine(line) 
+#    END IF
+#  END WHILE
+#  CALL ch.close()
+#END FUNCTION
+#
+#FUNCTION appendSource(fname)
+#  DEFINE fname,ext STRING
+#  DEFINE ch base.Channel
+#  DEFINE pre,line STRING
+#  LET ch=base.Channel.create()
+#  CALL ch.openFile(fname,"r")
+#  IF m_bat THEN
+#    LET pre="rem "
+#  ELSE
+#    LET pre="#"
+#  END IF
+#  CALL m_chw.writeLine(sfmt("%1__CAT_EOF_BEGIN__:%2",pre,fname))
+#  LET ext=os.Path.extension(fname)
+#  IF isBinary(fname) THEN
+#    CALL writeBinary(fname,pre) 
+#  ELSE
+#    WHILE (line:=ch.readLine()) IS NOT NULL
+#      CALL m_chw.writeLine(sfmt("%1%2",pre,line))
+#    END WHILE
+#  END IF
+#  CALL m_chw.writeLine(sfmt("%1__CAT_EOF_END__",pre))
+#  CALL ch.close()
+#END FUNCTION
+#
+#FUNCTION isBinary(fname)
+#  DEFINE fname,ext STRING
+#  DEFINE i INT
+#  LET ext=os.Path.extension(fname)
+#  FOR i=1 TO m_binarr.getLength()
+#    IF m_binarr[i]==ext THEN 
+#      RETURN TRUE
+#    END IF
+#  END FOR
+#  RETURN FALSE
+#END FUNCTION
+#
+#FUNCTION mysub(base64,index,linelength,len)
+#  DEFINE base64 STRING
+#  DEFINE index,linelength,len,endindex INT
+#  LET endindex=index+linelength-1
+#  RETURN base64.subString(index,IIF(endindex>len,len,endindex))
+#END FUNCTION
+#
+#FUNCTION writeBinary(fname,pre)
+#  DEFINE fname,pre STRING
+#  DEFINE base64,chunk STRING
+#  DEFINE index,linelength,len INT
+#  LET linelength=IIF(m_bat,76,79)
+#  LET index=1
+#  LET base64=util.Strings.base64Encode(fname)
+#  LET len=base64.getLength()
+#  --spit out 80 char pieces
+#  LET chunk=mysub(base64,index,linelength,len)
+#  WHILE chunk.getLength()>0
+#    CALL m_chw.writeLine(sfmt("%1%2",pre,chunk))
+#    LET index=index+linelength
+#    LET chunk=mysub(base64,index,linelength,len)
+#  END WHILE
+#END FUNCTION
+#
+#FUNCTION myerr(err)
+#  DEFINE err STRING
+#  DISPLAY "ERROR:",err
+#  EXIT PROGRAM 1
+#END FUNCTION
+#__CAT_EOF_END__
