@@ -33,8 +33,7 @@ echo IMPORT os >> %extractor%
 echo DEFINE tmpdir,fname,full,lastmodule STRING >> %extractor%
 echo DEFINE m_bat INT >> %extractor%
 echo DEFINE singlequote,doublequote,backslash,percent,dollar STRING >> %extractor%
-echo DEFINE m_binarr DYNAMIC ARRAY OF STRING >> %extractor%
-echo DEFINE m_imgarr DYNAMIC ARRAY OF STRING >> %extractor%
+echo DEFINE m_binTypeArr,m_resTypeArr,m_imgarr,m_resarr DYNAMIC ARRAY OF STRING >> %extractor%
 echo MAIN >> %extractor%
 echo   DEFINE line,err,catfile STRING >> %extractor%
 echo   DEFINE ch,chw base.Channel >> %extractor%
@@ -45,15 +44,22 @@ echo   LET doublequote=ASCII(34) >> %extractor%
 echo   LET backslash=ASCII(92) --we must not use the literal here >> %extractor%
 echo   LET percent=ASCII(37) >> %extractor%
 echo   LET dollar=ASCII(36) >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='png'  >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='jpg' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='bmp' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='gif' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='tiff' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='wav' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='mp3' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='aiff' >> %extractor%
-echo   LET m_binarr[m_binarr.getLength()+1]='mpg' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='png'  >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='jpg' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='bmp' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='gif' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='tiff' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='wav' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='mp3' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='aiff' >> %extractor%
+echo   LET m_binTypeArr[m_binTypeArr.getLength()+1]='mpg' >> %extractor%
+echo -- >> %extractor%
+echo   LET m_resTypeArr[m_resTypeArr.getLength()+1]='per'  >> %extractor%
+echo   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4st' >> %extractor%
+echo   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4tb' >> %extractor%
+echo   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4tm' >> %extractor%
+echo   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4sm' >> %extractor%
+echo   LET m_resTypeArr[m_resTypeArr.getLength()+1]='iem' >> %extractor%
 echo   LET sb=base.StringBuffer.create() >> %extractor%
 echo   LET catfile=fgl_getenv("_CATFILE") --set by calling script >> %extractor%
 echo   LET tmpdir=fgl_getenv("_TMPDIR") --set by calling script >> %extractor%
@@ -89,9 +95,12 @@ echo          LET full=os.Path.join(tmpdir,fname) >> %extractor%
 echo          CALL checkSubdirs() >> %extractor%
 echo          IF isBinary(fname) THEN >> %extractor%
 echo            LET writebin=TRUE >> %extractor%
-echo            CALL addImgDir(os.Path.dirName(fname)) >> %extractor%
+echo            CALL addDir(m_imgarr,os.Path.dirName(fname)) >> %extractor%
 echo            CALL sb.clear() >> %extractor%
 echo          ELSE >> %extractor%
+echo            IF isResource(fname) THEN >> %extractor%
+echo              CALL addDir(m_resarr,os.Path.dirName(fname)) >> %extractor%
+echo            END IF >> %extractor%
 echo            LET write=TRUE >> %extractor%
 echo            CALL chw.openFile(full,"w") >> %extractor%
 echo          END IF >> %extractor%
@@ -115,37 +124,65 @@ echo   CALL ch.close() >> %extractor%
 echo   CALL runLastModule() >> %extractor%
 echo END MAIN >> %extractor%
 echo -- >> %extractor%
-echo FUNCTION addImgDir(dirname) >> %extractor%
+echo FUNCTION checkResource() >> %extractor%
+echo   DEFINE ext STRING >> %extractor%
+echo   LET ext=os.Path.extension(fname) >> %extractor%
+echo -- >> %extractor%
+echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
+echo FUNCTION addDir(arr,dirname) >> %extractor%
+echo   DEFINE arr DYNAMIC ARRAY OF STRING >> %extractor%
 echo   DEFINE dirname STRING >> %extractor%
 echo   DEFINE i INT >> %extractor%
-echo   FOR i=1 TO m_imgarr.getLength() >> %extractor%
-echo     IF m_imgarr[i]=dirname THEN >> %extractor%
+echo   FOR i=1 TO arr.getLength() >> %extractor%
+echo     IF arr[i]=dirname THEN >> %extractor%
 echo       RETURN --already contained >> %extractor%
 echo     END IF >> %extractor%
 echo   END FOR >> %extractor%
-echo   LET m_imgarr[m_imgarr.getLength()+1]=dirname >> %extractor%
+echo   LET arr[arr.getLength()+1]=dirname >> %extractor%
+echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
+echo -- >> %extractor%
+echo FUNCTION setPathFor(arr,envName,cmd) >> %extractor%
+echo   DEFINE arr DYNAMIC ARRAY OF STRING >> %extractor%
+echo   DEFINE envName STRING >> %extractor%
+echo   DEFINE cmd STRING >> %extractor%
+echo   DEFINE i INT >> %extractor%
+echo   IF arr.getLength()>0 THEN >> %extractor%
+echo     LET cmd=cmd,envName,"=" >> %extractor%
+echo     LET cmd=IIF(m_bat,"set ",""),cmd >> %extractor%
+echo     IF fgl_getenv(envName) IS NOT NULL THEN >> %extractor%
+echo       IF m_bat THEN >> %extractor%
+echo         LET cmd=percent,envName,percent,";" >> %extractor%
+echo       ELSE >> %extractor%
+echo         LET cmd=dollar,envName,":" >> %extractor%
+echo       END IF >> %extractor%
+echo     END IF >> %extractor%
+echo     FOR i=1 TO arr.getLength() >> %extractor%
+echo         IF i>1 THEN >> %extractor%
+echo           LET cmd=cmd,IIF(m_bat,";",":") >> %extractor%
+echo         END IF >> %extractor%
+echo         LET cmd=cmd,os.Path.join(tmpdir,arr[i]) >> %extractor%
+echo     END FOR >> %extractor%
+echo     LET cmd=cmd,IIF(m_bat,"&&"," ") >> %extractor%
+echo   END IF >> %extractor%
+echo   RETURN cmd >> %extractor%
 echo END FUNCTION >> %extractor%
 echo -- >> %extractor%
 echo FUNCTION runLastModule() --we must get argument quoting right >> %extractor%
 echo   DEFINE i INT >> %extractor%
-echo   DEFINE arg,cmd STRING >> %extractor%
+echo   DEFINE arg,cmd,cmdsave,image2font STRING >> %extractor%
 echo   IF lastmodule IS NULL THEN RETURN END IF >> %extractor%
-echo   IF m_imgarr.getLength()>0 THEN >> %extractor%
-echo     LET cmd=IIF(m_bat,"set FGLIMAGEPATH=","FGLIMAGEPATH=") >> %extractor%
-echo     IF fgl_getenv("FGLIMAGEPATH") IS NOT NULL THEN >> %extractor%
-echo       IF m_bat THEN >> %extractor%
-echo         LET cmd=percent,"FGLIMAGEPATH",percent,";" >> %extractor%
-echo       ELSE >> %extractor%
-echo         LET cmd=dollar,"FGLIMAGEPATH:" >> %extractor%
-echo       END IF >> %extractor%
+echo   LET cmd=setPathFor(m_resarr,"FGLRESOURCEPATH",cmd) >> %extractor%
+echo   LET image2font=os.Path.join(os.Path.join(fgl_getenv("FGLDIR"),"lib"),"image2font.txt") >> %extractor%
+echo   LET cmdsave=cmd >> %extractor%
+echo   LET cmd=setPathFor(m_imgarr,"FGLIMAGEPATH",cmd) >> %extractor%
+echo   IF cmd!=cmdsave AND os.Path.exists(image2font) THEN >> %extractor%
+echo     IF m_bat THEN >> %extractor%
+echo       LET cmd=cmd,";",image2font,"&&" >> %extractor%
+echo     ELSE >> %extractor%
+echo       LET cmd=cmd.subString(1,cmd.getLength()-1),":",image2font," " >> %extractor%
 echo     END IF >> %extractor%
-echo     FOR i=1 TO m_imgarr.getLength() >> %extractor%
-echo         IF i>1 THEN >> %extractor%
-echo           LET cmd=cmd,IIF(m_bat,";",":") >> %extractor%
-echo         END IF >> %extractor%
-echo         LET cmd=cmd,os.Path.join(tmpdir,m_imgarr[i]) >> %extractor%
-echo     END FOR >> %extractor%
-echo     LET cmd=cmd,IIF(m_bat,"&&"," ") >> %extractor%
 echo   END IF >> %extractor%
 echo   LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule) >> %extractor%
 echo   FOR i=1 TO num_args() >> %extractor%
@@ -256,17 +293,29 @@ echo   END FOR >> %extractor%
 echo   RETURN sb.toString() >> %extractor%
 echo END FUNCTION >> %extractor%
 echo -- >> %extractor%
-echo FUNCTION isBinary(fname) >> %extractor%
+echo FUNCTION isInArray(arr,fname) >> %extractor%
+echo   DEFINE arr DYNAMIC ARRAY OF STRING >> %extractor%
 echo   DEFINE fname,ext STRING >> %extractor%
 echo   DEFINE i INT >> %extractor%
 echo   LET ext=os.Path.extension(fname) >> %extractor%
-echo   FOR i=1 TO m_binarr.getLength() >> %extractor%
-echo     IF m_binarr[i]==ext THEN  >> %extractor%
+echo   FOR i=1 TO arr.getLength() >> %extractor%
+echo     IF arr[i]==ext THEN  >> %extractor%
 echo       RETURN TRUE >> %extractor%
 echo     END IF >> %extractor%
 echo   END FOR >> %extractor%
 echo   RETURN FALSE >> %extractor%
 echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
+echo FUNCTION isBinary(fname) >> %extractor%
+echo   DEFINE fname STRING >> %extractor%
+echo   RETURN isInArray(m_binTypeArr,fname) >> %extractor%
+echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
+echo FUNCTION isResource(fname) >> %extractor%
+echo   DEFINE fname STRING >> %extractor%
+echo   RETURN isInArray(m_resTypeArr,fname) >> %extractor%
+echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
 set mydir=%cd%
 set mydrive=%~d0
 %tmpdrive%
@@ -412,8 +461,7 @@ rem IMPORT os
 rem DEFINE tmpdir,fname,full,lastmodule STRING
 rem DEFINE m_bat INT
 rem DEFINE singlequote,doublequote,backslash,percent,dollar STRING
-rem DEFINE m_binarr DYNAMIC ARRAY OF STRING
-rem DEFINE m_imgarr DYNAMIC ARRAY OF STRING
+rem DEFINE m_binTypeArr,m_resTypeArr,m_imgarr,m_resarr DYNAMIC ARRAY OF STRING
 rem MAIN
 rem   DEFINE line,err,catfile STRING
 rem   DEFINE ch,chw base.Channel
@@ -424,15 +472,22 @@ rem   LET doublequote=ASCII(34)
 rem   LET backslash=ASCII(92) --we must not use the literal here
 rem   LET percent=ASCII(37)
 rem   LET dollar=ASCII(36)
-rem   LET m_binarr[m_binarr.getLength()+1]='png' 
-rem   LET m_binarr[m_binarr.getLength()+1]='jpg'
-rem   LET m_binarr[m_binarr.getLength()+1]='bmp'
-rem   LET m_binarr[m_binarr.getLength()+1]='gif'
-rem   LET m_binarr[m_binarr.getLength()+1]='tiff'
-rem   LET m_binarr[m_binarr.getLength()+1]='wav'
-rem   LET m_binarr[m_binarr.getLength()+1]='mp3'
-rem   LET m_binarr[m_binarr.getLength()+1]='aiff'
-rem   LET m_binarr[m_binarr.getLength()+1]='mpg'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='png' 
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='jpg'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='bmp'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='gif'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='tiff'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='wav'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='mp3'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='aiff'
+rem   LET m_binTypeArr[m_binTypeArr.getLength()+1]='mpg'
+rem 
+rem   LET m_resTypeArr[m_resTypeArr.getLength()+1]='per' 
+rem   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4st'
+rem   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4tb'
+rem   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4tm'
+rem   LET m_resTypeArr[m_resTypeArr.getLength()+1]='4sm'
+rem   LET m_resTypeArr[m_resTypeArr.getLength()+1]='iem'
 rem   LET sb=base.StringBuffer.create()
 rem   LET catfile=fgl_getenv("_CATFILE") --set by calling script
 rem   LET tmpdir=fgl_getenv("_TMPDIR") --set by calling script
@@ -468,9 +523,12 @@ rem          LET full=os.Path.join(tmpdir,fname)
 rem          CALL checkSubdirs()
 rem          IF isBinary(fname) THEN
 rem            LET writebin=TRUE
-rem            CALL addImgDir(os.Path.dirName(fname))
+rem            CALL addDir(m_imgarr,os.Path.dirName(fname))
 rem            CALL sb.clear()
 rem          ELSE
+rem            IF isResource(fname) THEN
+rem              CALL addDir(m_resarr,os.Path.dirName(fname))
+rem            END IF
 rem            LET write=TRUE
 rem            CALL chw.openFile(full,"w")
 rem          END IF
@@ -494,37 +552,65 @@ rem   CALL ch.close()
 rem   CALL runLastModule()
 rem END MAIN
 rem 
-rem FUNCTION addImgDir(dirname)
+rem FUNCTION checkResource()
+rem   DEFINE ext STRING
+rem   LET ext=os.Path.extension(fname)
+rem 
+rem END FUNCTION
+rem 
+rem FUNCTION addDir(arr,dirname)
+rem   DEFINE arr DYNAMIC ARRAY OF STRING
 rem   DEFINE dirname STRING
 rem   DEFINE i INT
-rem   FOR i=1 TO m_imgarr.getLength()
-rem     IF m_imgarr[i]=dirname THEN
+rem   FOR i=1 TO arr.getLength()
+rem     IF arr[i]=dirname THEN
 rem       RETURN --already contained
 rem     END IF
 rem   END FOR
-rem   LET m_imgarr[m_imgarr.getLength()+1]=dirname
+rem   LET arr[arr.getLength()+1]=dirname
+rem END FUNCTION
+rem 
+rem 
+rem FUNCTION setPathFor(arr,envName,cmd)
+rem   DEFINE arr DYNAMIC ARRAY OF STRING
+rem   DEFINE envName STRING
+rem   DEFINE cmd STRING
+rem   DEFINE i INT
+rem   IF arr.getLength()>0 THEN
+rem     LET cmd=cmd,envName,"="
+rem     LET cmd=IIF(m_bat,"set ",""),cmd
+rem     IF fgl_getenv(envName) IS NOT NULL THEN
+rem       IF m_bat THEN
+rem         LET cmd=percent,envName,percent,";"
+rem       ELSE
+rem         LET cmd=dollar,envName,":"
+rem       END IF
+rem     END IF
+rem     FOR i=1 TO arr.getLength()
+rem         IF i>1 THEN
+rem           LET cmd=cmd,IIF(m_bat,";",":")
+rem         END IF
+rem         LET cmd=cmd,os.Path.join(tmpdir,arr[i])
+rem     END FOR
+rem     LET cmd=cmd,IIF(m_bat,"&&"," ")
+rem   END IF
+rem   RETURN cmd
 rem END FUNCTION
 rem 
 rem FUNCTION runLastModule() --we must get argument quoting right
 rem   DEFINE i INT
-rem   DEFINE arg,cmd STRING
+rem   DEFINE arg,cmd,cmdsave,image2font STRING
 rem   IF lastmodule IS NULL THEN RETURN END IF
-rem   IF m_imgarr.getLength()>0 THEN
-rem     LET cmd=IIF(m_bat,"set FGLIMAGEPATH=","FGLIMAGEPATH=")
-rem     IF fgl_getenv("FGLIMAGEPATH") IS NOT NULL THEN
-rem       IF m_bat THEN
-rem         LET cmd=percent,"FGLIMAGEPATH",percent,";"
-rem       ELSE
-rem         LET cmd=dollar,"FGLIMAGEPATH:"
-rem       END IF
+rem   LET cmd=setPathFor(m_resarr,"FGLRESOURCEPATH",cmd)
+rem   LET image2font=os.Path.join(os.Path.join(fgl_getenv("FGLDIR"),"lib"),"image2font.txt")
+rem   LET cmdsave=cmd
+rem   LET cmd=setPathFor(m_imgarr,"FGLIMAGEPATH",cmd)
+rem   IF cmd!=cmdsave AND os.Path.exists(image2font) THEN
+rem     IF m_bat THEN
+rem       LET cmd=cmd,";",image2font,"&&"
+rem     ELSE
+rem       LET cmd=cmd.subString(1,cmd.getLength()-1),":",image2font," "
 rem     END IF
-rem     FOR i=1 TO m_imgarr.getLength()
-rem         IF i>1 THEN
-rem           LET cmd=cmd,IIF(m_bat,";",":")
-rem         END IF
-rem         LET cmd=cmd,os.Path.join(tmpdir,m_imgarr[i])
-rem     END FOR
-rem     LET cmd=cmd,IIF(m_bat,"&&"," ")
 rem   END IF
 rem   LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule)
 rem   FOR i=1 TO num_args()
@@ -635,17 +721,29 @@ rem   END FOR
 rem   RETURN sb.toString()
 rem END FUNCTION
 rem 
-rem FUNCTION isBinary(fname)
+rem FUNCTION isInArray(arr,fname)
+rem   DEFINE arr DYNAMIC ARRAY OF STRING
 rem   DEFINE fname,ext STRING
 rem   DEFINE i INT
 rem   LET ext=os.Path.extension(fname)
-rem   FOR i=1 TO m_binarr.getLength()
-rem     IF m_binarr[i]==ext THEN 
+rem   FOR i=1 TO arr.getLength()
+rem     IF arr[i]==ext THEN 
 rem       RETURN TRUE
 rem     END IF
 rem   END FOR
 rem   RETURN FALSE
 rem END FUNCTION
+rem 
+rem FUNCTION isBinary(fname)
+rem   DEFINE fname STRING
+rem   RETURN isInArray(m_binTypeArr,fname)
+rem END FUNCTION
+rem 
+rem FUNCTION isResource(fname)
+rem   DEFINE fname STRING
+rem   RETURN isInArray(m_resTypeArr,fname)
+rem END FUNCTION
+rem 
 rem __CAT_EOF_END__
 rem __CAT_EOF_BEGIN__:fglscriptify.4gl
 rem IMPORT os

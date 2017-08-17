@@ -7,6 +7,8 @@ MAIN
   END FOR
   DISPLAY "FGLIMAGEPATH=",fgl_getenv("FGLIMAGEPATH")
   DISPLAY "DBPATH=",fgl_getenv("DBPATH")
+  DISPLAY "FGLRESOURCEPATH=",fgl_getenv("FGLRESOURCEPATH")
+  CALL ui.Interface.loadStyles("xx")
   OPEN FORM f FROM "xx"
   DISPLAY FORM f
   MENU
