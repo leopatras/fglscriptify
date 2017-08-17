@@ -1,0 +1,5 @@
+<StyleList>
+  <Style name="*">
+     <StyleAttribute name="backgroundColor" value="green" />
+  </Style>
+</StyleList>
