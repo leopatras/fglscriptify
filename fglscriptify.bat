@@ -124,12 +124,6 @@ echo   CALL ch.close() >> %extractor%
 echo   CALL runLastModule() >> %extractor%
 echo END MAIN >> %extractor%
 echo -- >> %extractor%
-echo FUNCTION checkResource() >> %extractor%
-echo   DEFINE ext STRING >> %extractor%
-echo   LET ext=os.Path.extension(fname) >> %extractor%
-echo -- >> %extractor%
-echo END FUNCTION >> %extractor%
-echo -- >> %extractor%
 echo FUNCTION addDir(arr,dirname) >> %extractor%
 echo   DEFINE arr DYNAMIC ARRAY OF STRING >> %extractor%
 echo   DEFINE dirname STRING >> %extractor%
@@ -142,15 +136,14 @@ echo   END FOR >> %extractor%
 echo   LET arr[arr.getLength()+1]=dirname >> %extractor%
 echo END FUNCTION >> %extractor%
 echo -- >> %extractor%
-echo -- >> %extractor%
 echo FUNCTION setPathFor(arr,envName,cmd) >> %extractor%
 echo   DEFINE arr DYNAMIC ARRAY OF STRING >> %extractor%
-echo   DEFINE envName STRING >> %extractor%
+echo   DEFINE envName,tmp STRING >> %extractor%
 echo   DEFINE cmd STRING >> %extractor%
 echo   DEFINE i INT >> %extractor%
 echo   IF arr.getLength()>0 THEN >> %extractor%
-echo     LET cmd=cmd,envName,"=" >> %extractor%
-echo     LET cmd=IIF(m_bat,"set ",""),cmd >> %extractor%
+echo     LET tmp=envName,"=" >> %extractor%
+echo     LET cmd=cmd,IIF(m_bat,"set ",""),tmp >> %extractor%
 echo     IF fgl_getenv(envName) IS NOT NULL THEN >> %extractor%
 echo       IF m_bat THEN >> %extractor%
 echo         LET cmd=percent,envName,percent,";" >> %extractor%
@@ -162,7 +155,7 @@ echo     FOR i=1 TO arr.getLength() >> %extractor%
 echo         IF i>1 THEN >> %extractor%
 echo           LET cmd=cmd,IIF(m_bat,";",":") >> %extractor%
 echo         END IF >> %extractor%
-echo         LET cmd=cmd,os.Path.join(tmpdir,arr[i]) >> %extractor%
+echo         LET cmd=cmd,quotePath(os.Path.join(tmpdir,arr[i])) >> %extractor%
 echo     END FOR >> %extractor%
 echo     LET cmd=cmd,IIF(m_bat,"&&"," ") >> %extractor%
 echo   END IF >> %extractor%
@@ -179,9 +172,9 @@ echo   LET cmdsave=cmd >> %extractor%
 echo   LET cmd=setPathFor(m_imgarr,"FGLIMAGEPATH",cmd) >> %extractor%
 echo   IF cmd!=cmdsave AND os.Path.exists(image2font) THEN >> %extractor%
 echo     IF m_bat THEN >> %extractor%
-echo       LET cmd=cmd,";",image2font,"&&" >> %extractor%
+echo       LET cmd=cmd.subString(1,cmd.getLength()-2),";",quotePath(image2font),"&&" >> %extractor%
 echo     ELSE >> %extractor%
-echo       LET cmd=cmd.subString(1,cmd.getLength()-1),":",image2font," " >> %extractor%
+echo       LET cmd=cmd.subString(1,cmd.getLength()-1),":",quotePath(image2font)," " >> %extractor%
 echo     END IF >> %extractor%
 echo   END IF >> %extractor%
 echo   LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule) >> %extractor%
@@ -202,6 +195,15 @@ echo     END CASE >> %extractor%
 echo   END FOR >> %extractor%
 echo   --DISPLAY "cmd:",cmd >> %extractor%
 echo   CALL myrun(cmd) >> %extractor%
+echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
+echo FUNCTION quotePath(p) >> %extractor%
+echo   DEFINE p STRING >> %extractor%
+echo   --TODO: quote space with backlash space >> %extractor%
+echo   --IF NOT m_bat AND p.getIndexOf(" ",1)!=0 >> %extractor%
+echo     --RETURN quoteSpace(p) >> %extractor%
+echo   --END IF >> %extractor%
+echo   RETURN p >> %extractor%
 echo END FUNCTION >> %extractor%
 echo -- >> %extractor%
 echo FUNCTION myerr(err) >> %extractor%
@@ -241,9 +243,6 @@ echo FUNCTION checkSubdirs() >> %extractor%
 echo   DEFINE i,found INT >> %extractor%
 echo   DEFINE dir,err STRING >> %extractor%
 echo   DEFINE dirs DYNAMIC ARRAY OF STRING >> %extractor%
-echo   IF m_bat THEN >> %extractor%
-echo     RETURN  >> %extractor%
-echo   END IF >> %extractor%
 echo   LET dir=os.Path.fullPath(os.Path.dirName(full)) >> %extractor%
 echo   WHILE TRUE >> %extractor%
 echo     CASE >> %extractor%
@@ -552,12 +551,6 @@ rem   CALL ch.close()
 rem   CALL runLastModule()
 rem END MAIN
 rem 
-rem FUNCTION checkResource()
-rem   DEFINE ext STRING
-rem   LET ext=os.Path.extension(fname)
-rem 
-rem END FUNCTION
-rem 
 rem FUNCTION addDir(arr,dirname)
 rem   DEFINE arr DYNAMIC ARRAY OF STRING
 rem   DEFINE dirname STRING
@@ -570,15 +563,14 @@ rem   END FOR
 rem   LET arr[arr.getLength()+1]=dirname
 rem END FUNCTION
 rem 
-rem 
 rem FUNCTION setPathFor(arr,envName,cmd)
 rem   DEFINE arr DYNAMIC ARRAY OF STRING
-rem   DEFINE envName STRING
+rem   DEFINE envName,tmp STRING
 rem   DEFINE cmd STRING
 rem   DEFINE i INT
 rem   IF arr.getLength()>0 THEN
-rem     LET cmd=cmd,envName,"="
-rem     LET cmd=IIF(m_bat,"set ",""),cmd
+rem     LET tmp=envName,"="
+rem     LET cmd=cmd,IIF(m_bat,"set ",""),tmp
 rem     IF fgl_getenv(envName) IS NOT NULL THEN
 rem       IF m_bat THEN
 rem         LET cmd=percent,envName,percent,";"
@@ -590,7 +582,7 @@ rem     FOR i=1 TO arr.getLength()
 rem         IF i>1 THEN
 rem           LET cmd=cmd,IIF(m_bat,";",":")
 rem         END IF
-rem         LET cmd=cmd,os.Path.join(tmpdir,arr[i])
+rem         LET cmd=cmd,quotePath(os.Path.join(tmpdir,arr[i]))
 rem     END FOR
 rem     LET cmd=cmd,IIF(m_bat,"&&"," ")
 rem   END IF
@@ -607,9 +599,9 @@ rem   LET cmdsave=cmd
 rem   LET cmd=setPathFor(m_imgarr,"FGLIMAGEPATH",cmd)
 rem   IF cmd!=cmdsave AND os.Path.exists(image2font) THEN
 rem     IF m_bat THEN
-rem       LET cmd=cmd,";",image2font,"&&"
+rem       LET cmd=cmd.subString(1,cmd.getLength()-2),";",quotePath(image2font),"&&"
 rem     ELSE
-rem       LET cmd=cmd.subString(1,cmd.getLength()-1),":",image2font," "
+rem       LET cmd=cmd.subString(1,cmd.getLength()-1),":",quotePath(image2font)," "
 rem     END IF
 rem   END IF
 rem   LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule)
@@ -630,6 +622,15 @@ rem     END CASE
 rem   END FOR
 rem   --DISPLAY "cmd:",cmd
 rem   CALL myrun(cmd)
+rem END FUNCTION
+rem 
+rem FUNCTION quotePath(p)
+rem   DEFINE p STRING
+rem   --TODO: quote space with backlash space
+rem   --IF NOT m_bat AND p.getIndexOf(" ",1)!=0
+rem     --RETURN quoteSpace(p)
+rem   --END IF
+rem   RETURN p
 rem END FUNCTION
 rem 
 rem FUNCTION myerr(err)
@@ -669,9 +670,6 @@ rem FUNCTION checkSubdirs()
 rem   DEFINE i,found INT
 rem   DEFINE dir,err STRING
 rem   DEFINE dirs DYNAMIC ARRAY OF STRING
-rem   IF m_bat THEN
-rem     RETURN 
-rem   END IF
 rem   LET dir=os.Path.fullPath(os.Path.dirName(full))
 rem   WHILE TRUE
 rem     CASE
