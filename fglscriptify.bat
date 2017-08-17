@@ -32,8 +32,9 @@ echo IMPORT util >> %extractor%
 echo IMPORT os >> %extractor%
 echo DEFINE tmpdir,fname,full,lastmodule STRING >> %extractor%
 echo DEFINE m_bat INT >> %extractor%
-echo DEFINE singlequote,doublequote,backslash STRING >> %extractor%
+echo DEFINE singlequote,doublequote,backslash,percent,dollar STRING >> %extractor%
 echo DEFINE m_binarr DYNAMIC ARRAY OF STRING >> %extractor%
+echo DEFINE m_imgarr DYNAMIC ARRAY OF STRING >> %extractor%
 echo MAIN >> %extractor%
 echo   DEFINE line,err,catfile STRING >> %extractor%
 echo   DEFINE ch,chw base.Channel >> %extractor%
@@ -42,6 +43,8 @@ echo   DEFINE write,writebin INT >> %extractor%
 echo   LET singlequote=ASCII(39) >> %extractor%
 echo   LET doublequote=ASCII(34) >> %extractor%
 echo   LET backslash=ASCII(92) --we must not use the literal here >> %extractor%
+echo   LET percent=ASCII(37) >> %extractor%
+echo   LET dollar=ASCII(36) >> %extractor%
 echo   LET m_binarr[m_binarr.getLength()+1]='png'  >> %extractor%
 echo   LET m_binarr[m_binarr.getLength()+1]='jpg' >> %extractor%
 echo   LET m_binarr[m_binarr.getLength()+1]='bmp' >> %extractor%
@@ -86,6 +89,7 @@ echo          LET full=os.Path.join(tmpdir,fname) >> %extractor%
 echo          CALL checkSubdirs() >> %extractor%
 echo          IF isBinary(fname) THEN >> %extractor%
 echo            LET writebin=TRUE >> %extractor%
+echo            CALL addImgDir(os.Path.dirName(fname)) >> %extractor%
 echo            CALL sb.clear() >> %extractor%
 echo          ELSE >> %extractor%
 echo            LET write=TRUE >> %extractor%
@@ -111,11 +115,39 @@ echo   CALL ch.close() >> %extractor%
 echo   CALL runLastModule() >> %extractor%
 echo END MAIN >> %extractor%
 echo -- >> %extractor%
+echo FUNCTION addImgDir(dirname) >> %extractor%
+echo   DEFINE dirname STRING >> %extractor%
+echo   DEFINE i INT >> %extractor%
+echo   FOR i=1 TO m_imgarr.getLength() >> %extractor%
+echo     IF m_imgarr[i]=dirname THEN >> %extractor%
+echo       RETURN --already contained >> %extractor%
+echo     END IF >> %extractor%
+echo   END FOR >> %extractor%
+echo   LET m_imgarr[m_imgarr.getLength()+1]=dirname >> %extractor%
+echo END FUNCTION >> %extractor%
+echo -- >> %extractor%
 echo FUNCTION runLastModule() --we must get argument quoting right >> %extractor%
 echo   DEFINE i INT >> %extractor%
 echo   DEFINE arg,cmd STRING >> %extractor%
 echo   IF lastmodule IS NULL THEN RETURN END IF >> %extractor%
-echo   LET cmd="fglrun ",os.Path.join(tmpdir,lastmodule) >> %extractor%
+echo   IF m_imgarr.getLength()>0 THEN >> %extractor%
+echo     LET cmd=IIF(m_bat,"set FGLIMAGEPATH=","FGLIMAGEPATH=") >> %extractor%
+echo     IF fgl_getenv("FGLIMAGEPATH") IS NOT NULL THEN >> %extractor%
+echo       IF m_bat THEN >> %extractor%
+echo         LET cmd=percent,"FGLIMAGEPATH",percent,";" >> %extractor%
+echo       ELSE >> %extractor%
+echo         LET cmd=dollar,"FGLIMAGEPATH:" >> %extractor%
+echo       END IF >> %extractor%
+echo     END IF >> %extractor%
+echo     FOR i=1 TO m_imgarr.getLength() >> %extractor%
+echo         IF i>1 THEN >> %extractor%
+echo           LET cmd=cmd,IIF(m_bat,";",":") >> %extractor%
+echo         END IF >> %extractor%
+echo         LET cmd=cmd,os.Path.join(tmpdir,m_imgarr[i]) >> %extractor%
+echo     END FOR >> %extractor%
+echo     LET cmd=cmd,IIF(m_bat,"&&"," ") >> %extractor%
+echo   END IF >> %extractor%
+echo   LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule) >> %extractor%
 echo   FOR i=1 TO num_args() >> %extractor%
 echo     LET arg=arg_val(i) >> %extractor%
 echo     CASE >> %extractor%
@@ -379,8 +411,9 @@ rem IMPORT util
 rem IMPORT os
 rem DEFINE tmpdir,fname,full,lastmodule STRING
 rem DEFINE m_bat INT
-rem DEFINE singlequote,doublequote,backslash STRING
+rem DEFINE singlequote,doublequote,backslash,percent,dollar STRING
 rem DEFINE m_binarr DYNAMIC ARRAY OF STRING
+rem DEFINE m_imgarr DYNAMIC ARRAY OF STRING
 rem MAIN
 rem   DEFINE line,err,catfile STRING
 rem   DEFINE ch,chw base.Channel
@@ -389,6 +422,8 @@ rem   DEFINE write,writebin INT
 rem   LET singlequote=ASCII(39)
 rem   LET doublequote=ASCII(34)
 rem   LET backslash=ASCII(92) --we must not use the literal here
+rem   LET percent=ASCII(37)
+rem   LET dollar=ASCII(36)
 rem   LET m_binarr[m_binarr.getLength()+1]='png' 
 rem   LET m_binarr[m_binarr.getLength()+1]='jpg'
 rem   LET m_binarr[m_binarr.getLength()+1]='bmp'
@@ -433,6 +468,7 @@ rem          LET full=os.Path.join(tmpdir,fname)
 rem          CALL checkSubdirs()
 rem          IF isBinary(fname) THEN
 rem            LET writebin=TRUE
+rem            CALL addImgDir(os.Path.dirName(fname))
 rem            CALL sb.clear()
 rem          ELSE
 rem            LET write=TRUE
@@ -458,11 +494,39 @@ rem   CALL ch.close()
 rem   CALL runLastModule()
 rem END MAIN
 rem 
+rem FUNCTION addImgDir(dirname)
+rem   DEFINE dirname STRING
+rem   DEFINE i INT
+rem   FOR i=1 TO m_imgarr.getLength()
+rem     IF m_imgarr[i]=dirname THEN
+rem       RETURN --already contained
+rem     END IF
+rem   END FOR
+rem   LET m_imgarr[m_imgarr.getLength()+1]=dirname
+rem END FUNCTION
+rem 
 rem FUNCTION runLastModule() --we must get argument quoting right
 rem   DEFINE i INT
 rem   DEFINE arg,cmd STRING
 rem   IF lastmodule IS NULL THEN RETURN END IF
-rem   LET cmd="fglrun ",os.Path.join(tmpdir,lastmodule)
+rem   IF m_imgarr.getLength()>0 THEN
+rem     LET cmd=IIF(m_bat,"set FGLIMAGEPATH=","FGLIMAGEPATH=")
+rem     IF fgl_getenv("FGLIMAGEPATH") IS NOT NULL THEN
+rem       IF m_bat THEN
+rem         LET cmd=percent,"FGLIMAGEPATH",percent,";"
+rem       ELSE
+rem         LET cmd=dollar,"FGLIMAGEPATH:"
+rem       END IF
+rem     END IF
+rem     FOR i=1 TO m_imgarr.getLength()
+rem         IF i>1 THEN
+rem           LET cmd=cmd,IIF(m_bat,";",":")
+rem         END IF
+rem         LET cmd=cmd,os.Path.join(tmpdir,m_imgarr[i])
+rem     END FOR
+rem     LET cmd=cmd,IIF(m_bat,"&&"," ")
+rem   END IF
+rem   LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule)
 rem   FOR i=1 TO num_args()
 rem     LET arg=arg_val(i)
 rem     CASE

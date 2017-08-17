@@ -7,8 +7,9 @@ IMPORT util
 IMPORT os
 DEFINE tmpdir,fname,full,lastmodule STRING
 DEFINE m_bat INT
-DEFINE singlequote,doublequote,backslash STRING
+DEFINE singlequote,doublequote,backslash,percent,dollar STRING
 DEFINE m_binarr DYNAMIC ARRAY OF STRING
+DEFINE m_imgarr DYNAMIC ARRAY OF STRING
 MAIN
   DEFINE line,err,catfile STRING
   DEFINE ch,chw base.Channel
@@ -17,6 +18,8 @@ MAIN
   LET singlequote=ASCII(39)
   LET doublequote=ASCII(34)
   LET backslash=ASCII(92) --we must not use the literal here
+  LET percent=ASCII(37)
+  LET dollar=ASCII(36)
   LET m_binarr[m_binarr.getLength()+1]='png' 
   LET m_binarr[m_binarr.getLength()+1]='jpg'
   LET m_binarr[m_binarr.getLength()+1]='bmp'
@@ -61,6 +64,7 @@ MAIN
          CALL checkSubdirs()
          IF isBinary(fname) THEN
            LET writebin=TRUE
+           CALL addImgDir(os.Path.dirName(fname))
            CALL sb.clear()
          ELSE
            LET write=TRUE
@@ -86,11 +90,39 @@ MAIN
   CALL runLastModule()
 END MAIN
 
+FUNCTION addImgDir(dirname)
+  DEFINE dirname STRING
+  DEFINE i INT
+  FOR i=1 TO m_imgarr.getLength()
+    IF m_imgarr[i]=dirname THEN
+      RETURN --already contained
+    END IF
+  END FOR
+  LET m_imgarr[m_imgarr.getLength()+1]=dirname
+END FUNCTION
+
 FUNCTION runLastModule() --we must get argument quoting right
   DEFINE i INT
   DEFINE arg,cmd STRING
   IF lastmodule IS NULL THEN RETURN END IF
-  LET cmd="fglrun ",os.Path.join(tmpdir,lastmodule)
+  IF m_imgarr.getLength()>0 THEN
+    LET cmd=IIF(m_bat,"set FGLIMAGEPATH=","FGLIMAGEPATH=")
+    IF fgl_getenv("FGLIMAGEPATH") IS NOT NULL THEN
+      IF m_bat THEN
+        LET cmd=percent,"FGLIMAGEPATH",percent,";"
+      ELSE
+        LET cmd=dollar,"FGLIMAGEPATH:"
+      END IF
+    END IF
+    FOR i=1 TO m_imgarr.getLength()
+        IF i>1 THEN
+          LET cmd=cmd,IIF(m_bat,";",":")
+        END IF
+        LET cmd=cmd,os.Path.join(tmpdir,m_imgarr[i])
+    END FOR
+    LET cmd=cmd,IIF(m_bat,"&&"," ")
+  END IF
+  LET cmd=cmd,"fglrun ",os.Path.join(tmpdir,lastmodule)
   FOR i=1 TO num_args()
     LET arg=arg_val(i)
     CASE

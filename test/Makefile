@@ -3,11 +3,11 @@ all: xx xx.bat
 
 xx: xx.4gl
 	rm -f xx
-	../fglscriptify --env FGLIMAGEPATH=foo next.png xx.4gl
+	../fglscriptify next.png icons/smiley.png xx.per xx.4gl
 
 xx.bat: xx.4gl
 	rm -f xx.bat
-	../fglscriptify --env FGLIMAGEPATH=foo -o xx.bat next.png xx.4gl
+	../fglscriptify -o xx.bat next.png icons/smiley.png xx.per xx.4gl
 
 clean:
 	rm -f xx xx.bat
